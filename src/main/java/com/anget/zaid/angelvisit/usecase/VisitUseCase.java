@@ -3,22 +3,25 @@ package com.anget.zaid.angelvisit.usecase;
 import com.anget.zaid.angelvisit.api.dto.VisitRequest;
 import com.anget.zaid.angelvisit.api.dto.VisitResponse;
 import com.anget.zaid.angelvisit.api.dto.VisitedCountry;
-import com.anget.zaid.angelvisit.neighbours.CountryNeighbours;
 import com.anget.zaid.angelvisit.countryInformation.Neighbours;
 import com.anget.zaid.angelvisit.exchangerate.ExchangeService;
 import com.anget.zaid.angelvisit.exchangerate.dto.ExchangeRate;
+import com.anget.zaid.angelvisit.neighbours.CountryNeighbours;
 import com.anget.zaid.angelvisit.usecase.exceptions.InvalidRequestException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Objects;
 
 import static com.anget.zaid.angelvisit.helper.CountryHelper.currencyOf;
+import static java.math.BigDecimal.ZERO;
 import static java.math.BigDecimal.valueOf;
 import static java.util.Objects.isNull;
 
 public class VisitUseCase {
+    private final static Logger LOGGER = LoggerFactory.getLogger(VisitUseCase.class);
     private final CountryNeighbours countryNeighbours;
     private final ExchangeService exchangeService;
 
@@ -30,6 +33,7 @@ public class VisitUseCase {
     public VisitResponse process(VisitRequest visitRequest) {
         try {
             validateRequest(visitRequest);
+            LOGGER.info("Retrieving neighbours information...");
             Neighbours neighbours = countryNeighbours.retrieveNeighbours(visitRequest.getStartingCountry());
             validateNeighbours(neighbours, visitRequest.getStartingCountry());
             return calculateTrip(visitRequest, neighbours);
@@ -42,6 +46,7 @@ public class VisitUseCase {
     }
 
     private void validateNeighbours(Neighbours neighbours, String startingCountry) {
+        LOGGER.info("Validating neighbours");
         if (isNull(neighbours.getCountyInformation()) || neighbours.getCountyInformation().isEmpty())
             throw new InvalidRequestException("Country " + startingCountry + " has no neighbours!");
     }
@@ -53,12 +58,9 @@ public class VisitUseCase {
             throw new InvalidRequestException("insufficient trip fund");
         }
 
-
         result.setVisitedCountryList(extractVisitedCountries(neighbours));
         ExchangeRate exchangeRate = exchangeService.getQuotation();
-        // for (int i = 0; i < numberOfTrips; i++) {
         executeTrip(exchangeRate, result, visitRequest);
-        //}
         result.setIsValid(true);
         return result;
     }
@@ -70,7 +72,7 @@ public class VisitUseCase {
             VisitedCountry visitedCountry = new VisitedCountry();
             visitedCountry.setCountry(n.getCountryCode());
             visitedCountry.setCurrency(currencyOf(n.getCountryCode()));
-            visitedCountry.setAmountSpent(BigDecimal.ZERO);
+            visitedCountry.setAmountSpent(ZERO);
             result.add(visitedCountry);
         });
         return result;
@@ -80,12 +82,12 @@ public class VisitUseCase {
         if (visitRequest.getTotalBudget().compareTo(valueOf(visitResponse.getVisitedCountryList().size() * visitRequest.getBudgetPerCountry().doubleValue())) < 0)
             return;
         VisitedCountry visitedCountry = new VisitedCountry();
-        visitedCountry.setAmountSpent(BigDecimal.ZERO);
-        final double[] totalBudget = {visitRequest.getTotalBudget().doubleValue()};
-        visitResponse.getVisitedCountryList().forEach(v -> {
+        visitedCountry.setAmountSpent(ZERO);
+        double totalBudget = visitRequest.getTotalBudget().doubleValue();
+        for (VisitedCountry v : visitResponse.getVisitedCountryList()) {
             Double exchangeValue = exchangeRate.getRates().get(currencyOf(v.getCountry()));
             BigDecimal amountSpent;
-            if (Objects.isNull(exchangeValue)) {
+            if (isNull(exchangeValue)) {
                 amountSpent = v.getAmountSpent().add(visitRequest.getBudgetPerCountry());
                 v.setAmountSpent(amountSpent);
                 v.setCurrency(visitRequest.getCurrency());
@@ -94,15 +96,16 @@ public class VisitUseCase {
                         .add(visitRequest.getBudgetPerCountry().multiply(valueOf(exchangeValue)));
                 v.setAmountSpent(amountSpent);
             }
-            totalBudget[0] = totalBudget[0] - visitRequest.getBudgetPerCountry().doubleValue();
-            visitResponse.setRemainingAmount(valueOf(totalBudget[0]));
-        });
-        visitRequest.setTotalBudget(valueOf(totalBudget[0]));
+            totalBudget = totalBudget - visitRequest.getBudgetPerCountry().doubleValue();
+            visitResponse.setRemainingAmount(valueOf(totalBudget));
+        }
+        visitRequest.setTotalBudget(valueOf(totalBudget));
         visitResponse.setNumberOfTrips(visitResponse.getNumberOfTrips() + 1);
         executeTrip(exchangeRate, visitResponse, visitRequest);
     }
 
     private void validateRequest(VisitRequest visitRequest) {
+        LOGGER.info("validating request...");
         if (isNull(visitRequest))
             throw new InvalidRequestException("Request Cannot be null");
         if (isNull(visitRequest.getStartingCountry()) ||
